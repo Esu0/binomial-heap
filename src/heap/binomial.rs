@@ -1,7 +1,9 @@
 #[allow(dead_code)]
 mod binomial_tree {
-    use std::cell::RefCell;
-    use std::rc::{Rc, Weak};
+    use std::cell::{Ref, RefCell, RefMut};
+    use std::fmt;
+    use std::rc::Rc;
+
     struct Node<T> {
         val: T,
         degree: usize,
@@ -9,8 +11,8 @@ mod binomial_tree {
         child: NodePtr<T>,
     }
 
-    type NodePtr<T> = Rc<RefCell<Option<Node<T>>>>;
-    type NodePtrWeak<T> = Weak<RefCell<Option<Node<T>>>>;
+    struct NodePtr<T>(Rc<RefCell<Option<Node<T>>>>);
+    // type NodePtrWeak<T> = Weak<RefCell<Option<Node<T>>>>;
 
     struct BinomialHeap<T> {
         head: NodePtr<T>,
@@ -19,27 +21,64 @@ mod binomial_tree {
         size: usize,
     }
 
+    impl<T> NodePtr<T> {
+        fn new(node: Node<T>) -> Self {
+            Self(Rc::new(RefCell::new(Some(node))))
+        }
+
+        fn null() -> Self {
+            Self(Rc::new(RefCell::new(None)))
+        }
+
+        fn borrow(&self) -> Ref<Option<Node<T>>> {
+            self.0.borrow()
+        }
+
+        fn borrow_mut(&self) -> RefMut<Option<Node<T>>> {
+            self.0.borrow_mut()
+        }
+
+        fn fmt_rec(&self, f: &mut fmt::Formatter<'_>, spaces: usize) -> fmt::Result
+        where
+            T: fmt::Display,
+        {
+            if let Some(n) = self.0.borrow().as_ref() {
+                writeln!(f, "{}|{}\t\t", "\t\t".repeat(spaces), n.val)?;
+                n.child.fmt_rec(f, spaces + 1)?;
+                n.bro.fmt_rec(f, spaces)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl<T> Clone for NodePtr<T> {
+        fn clone(&self) -> Self {
+            Self(Rc::clone(&self.0))
+        }
+    }
+
     impl<T> Node<T> {
         fn new(val: T, bro: NodePtr<T>) -> Self {
             Self {
                 val,
                 degree: 0,
                 bro,
-                child: Rc::new(RefCell::new(None)),
+                child: NodePtr::null(),
             }
         }
 
-        fn ptr_null() -> NodePtr<T> {
-            Rc::new(RefCell::new(None))
+        fn into_val(self) -> T {
+            self.val
         }
     }
 
     impl<T> BinomialHeap<T> {
         pub fn new() -> Self {
-            let p = Rc::new(RefCell::new(None));
+            let p = NodePtr::null();
             Self {
-                min: Rc::clone(&p),
-                tail: Rc::clone(&p),
+                min: p.clone(),
+                tail: p.clone(),
                 head: p,
                 size: 0,
             }
@@ -54,37 +93,118 @@ mod binomial_tree {
                 .as_ref()
                 .map(|n| n.val > val)
                 .unwrap_or(true);
-            let new_node = Node::new(val, Rc::clone(&self.head));
-            self.head = Rc::new(RefCell::new(Some(new_node)));
+            let new_node = Node::new(val, self.head.clone());
+            self.head = NodePtr::new(new_node);
             if update_min {
-                self.min = Rc::clone(&self.head);
+                self.min = self.head.clone();
             }
             self.size += 1;
         }
 
+        fn delete_min(&mut self) -> T {
+            let mut m = self.min.borrow_mut();
+            let m_old = std::mem::replace(&mut *m, None);
+            let m_old_ref = m_old.as_ref().unwrap();
+            std::mem::swap(&mut *m, &mut *m_old_ref.bro.borrow_mut());
+            std::mem::swap(
+                &mut *self.tail.borrow_mut(),
+                &mut *m_old_ref.child.borrow_mut(),
+            );
+            drop(m);
+            self.consolidate();
+            self.size -= 1;
+            m_old.unwrap().into_val()
+        }
+
         fn consolidate(&mut self) {
-            let mut nodelist = vec![
-                Some(Node::<T>::ptr_null());
-                self.size.next_power_of_two().trailing_zeros() as usize
-            ];
-            let ptr = Rc::clone(&self.head);
+            let mut nodelist: Vec<Option<NodePtr<T>>> =
+                vec![None; self.size.next_power_of_two().trailing_zeros() as usize];
+            let mut ptr = self.head.clone();
+
             // let ptr2 = Rc::clone(&ptr);
             loop {
-                if ptr.borrow().is_none() {
-                    break;
+                self.tail = match ptr.borrow().as_ref() {
+                    Some(n) => {
+                        if self.min.borrow().as_ref().map(|m| m.val > n.val).unwrap_or(true) {
+                            self.min = ptr.clone();
+                        }
+                        n.bro.clone()
+                    }
+                    None => {
+                        break;
+                    }
+                };
+                if {
+                    let inner = ptr.borrow();
+                    if let Some(p) = nodelist[inner.as_ref().unwrap().degree].take() {
+                        drop(inner);
+                        self.meld(ptr.clone(), p);
+                        false
+                    } else {
+                        nodelist[inner.as_ref().unwrap().degree] = Some(ptr.clone());
+                        true
+                    }
+                } {
+                    ptr = self.tail.clone();
                 }
-                if let Some(p) = nodelist[ptr.borrow().as_ref().unwrap().degree].take() {
-                    
-                    self.meld(&ptr, &p);
-                } else {
-                    nodelist[ptr.borrow().as_ref().unwrap().degree] = Some(Rc::clone(&ptr));
-                }
-                
+                // https://github.com/rust-lang/rust/issues/70919
             }
         }
 
-        fn meld(&mut self, p1: &NodePtr<T>, p2: &NodePtr<T>) {
+        fn meld(&mut self, p1: NodePtr<T>, p2: NodePtr<T>) -> NodePtr<T> {
+            let mut wp1n = p1.borrow_mut();
+            let mut wp2n = p2.borrow_mut();
+            let p1n = wp1n.as_mut().unwrap();
+            let p2n = wp2n.as_mut().unwrap();
+            if p1n.val > p2n.val {
+                // drop(p1n);
+                p2n.degree += 1;
+                let p2ncrc = p2n.child.clone();
+                drop(p2n);
+                drop(wp2n);
+                let mut p2nc = p2ncrc.borrow_mut();
+                std::mem::swap(&mut *wp1n, &mut *p2nc);
+                std::mem::swap(&mut *p2nc.as_mut().unwrap().bro.borrow_mut(), &mut *wp1n);
+                p2
+            } else {
+                // drop(p2n);
+                p1n.degree += 1;
+                let p1ncrc = p1n.child.clone();
+                drop(p1n);
+                drop(wp1n);
+                let mut p1nc = p1ncrc.borrow_mut();
+                std::mem::swap(&mut *wp2n, &mut *p1nc);
+                std::mem::swap(&mut *p1nc.as_mut().unwrap().bro.borrow_mut(), &mut *wp2n);
+                p1
+            }
+        }
+    }
 
+    impl<T: fmt::Display> fmt::Debug for BinomialHeap<T> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.head.fmt_rec(f, 0)?;
+            if let Some(n) = self.min.borrow().as_ref() {
+                writeln!(f, "minimum: {}", n.val)
+            } else {
+                writeln!(f, "minimum: None")
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod test {
+        #[allow(unused_imports)]
+        use super::*;
+
+        #[test]
+        fn heaptest() {
+            let mut heap = BinomialHeap::new();
+            heap.insert(10);
+            heap.insert(20);
+            heap.insert(30);
+            println!("{:?}", &heap);
+            println!("{}", heap.delete_min());
+            println!("{:?}", &heap);
         }
     }
 }
@@ -149,5 +269,28 @@ mod test {
             println!("address of p: {}", ptr_to_address(p));
             println!("address of reference p: {}", ref_to_address(&(*p)));
         }
+    }
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    #[test]
+    fn cell_test() {
+        let cell = Rc::new(RefCell::new(30));
+        let cell2 = Rc::clone(&cell);
+        let mut ref1 = cell.borrow_mut();
+        *ref1 = 4;
+        drop(ref1);
+        let mut ref2 = cell2.borrow_mut();
+        *ref2 = 3;
+        println!("{}", ref2);
+    }
+
+    #[test]
+    fn rc_test() {
+        let rc1 = Rc::new(100);
+        let mut rc2 = Rc::new(15);
+        println!("{}", rc2);
+        rc2 = Rc::clone(&rc1);
+        println!("{}", rc2);
     }
 }
