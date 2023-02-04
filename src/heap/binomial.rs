@@ -174,6 +174,7 @@ mod binomial_tree {
                 drop(wp1n);
                 let mut p1nc = p1ncrc.borrow_mut();
                 std::mem::swap(&mut *wp2n, &mut *p1nc);
+                let p1ncb = std::mem::replace(&mut p1nc.as_mut().unwrap().bro, p2.clone());
                 std::mem::swap(&mut *p1nc.as_mut().unwrap().bro.borrow_mut(), &mut *wp2n);
                 p1
             }

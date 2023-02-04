@@ -1,4 +1,1 @@
-mod binomial;
-mod cycliclist;
-mod fibonacci;
-mod list;
+pub mod pairing;
