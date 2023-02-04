@@ -9,9 +9,10 @@ name = "heaps"
 path = "src/lib.rs"
 
 [dependencies]
+rand = "0.8.5"
 
 [dev-dependencies]
-criterion = "0.4.0"
+criterion = {version = "0.4.0", features = ["html_reports"]}
 
 [[bench]]
 name = "benchmark"
