@@ -253,7 +253,9 @@ impl<K: Display> Node<K> {
                 writeln!(f, "{}{}", "\t".repeat(spaces), (*p.as_ptr()).key)?;
                 Self::fmt_tree((*p.as_ptr()).child, f, spaces + 1)?;
                 n = (*p.as_ptr()).next;
-                if n == node { break; }
+                if n == node {
+                    break;
+                }
             }
             Ok(())
         }
@@ -263,6 +265,91 @@ impl<K: Display> Node<K> {
 impl<K: Display> Debug for BinomialHeap<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Node::fmt_tree(self.min, f, 0)
+    }
+}
+
+impl<K> Node<K> {
+    fn drop_node(mut node: Option<NonNull<Node<K>>>) {
+        let end = node;
+        let layout = Layout::new::<Self>();
+        while let Some(p) = node {
+            unsafe {
+                let Node {
+                    next,
+                    prev: _,
+                    child,
+                    degree: _,
+                    key: _,
+                } = std::ptr::read(p.as_ptr());
+                std::alloc::dealloc(p.as_ptr() as *mut _, layout);
+                node = next;
+                Self::drop_node(child);
+            }
+            if node == end {
+                break;
+            }
+        }
+    }
+}
+
+impl<K: Clone> Node<K> {
+    fn clone_node(node: NonNull<Node<K>>) -> NonNull<Node<K>> {
+        unsafe {
+            let layout = Layout::new::<Self>();
+            let raw = std::alloc::alloc(layout) as *mut Self;
+            std::ptr::write(
+                raw,
+                Self {
+                    next: None,
+                    prev: None,
+                    child: (*node.as_ptr()).child.map(Self::clone_node),
+                    degree: (*node.as_ptr()).degree,
+                    key: (*node.as_ptr()).key.clone(),
+                },
+            );
+            let new_node = NonNull::new_unchecked(raw);
+            let mut prev = new_node;
+            let mut ptr = node;
+            while let Some(p) = (*ptr.as_ptr()).next {
+                if p == node {
+                    break;
+                }
+                let raw = std::alloc::alloc(layout) as *mut Self;
+                std::ptr::write(
+                    raw,
+                    Self {
+                        next: None,
+                        prev: Some(prev),
+                        child: (*p.as_ptr()).child.map(Self::clone_node),
+                        degree: (*p.as_ptr()).degree,
+                        key: (*p.as_ptr()).key.clone(),
+                    },
+                );
+                let tmp = NonNull::new_unchecked(raw);
+                (*prev.as_ptr()).next = Some(tmp);
+                prev = tmp;
+                ptr = p;
+            }
+            (*prev.as_ptr()).next = Some(new_node);
+            (*new_node.as_ptr()).prev = Some(prev);
+            new_node
+        }
+    }
+}
+
+impl<K> Drop for BinomialHeap<K> {
+    fn drop(&mut self) {
+        Node::drop_node(self.min);
+    }
+}
+
+impl<K: Clone> Clone for BinomialHeap<K> {
+    fn clone(&self) -> Self {
+        Self {
+            min: self.min.map(Node::clone_node),
+            size: self.size,
+            marker: PhantomData,
+        }
     }
 }
 
@@ -307,12 +394,19 @@ mod test {
         }
     }
 
-    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
     struct IntDebug(i32);
 
     impl Display for IntDebug {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{}", self.0)
+        }
+    }
+
+    impl Clone for IntDebug {
+        fn clone(&self) -> Self {
+            println!("clone {}", self.0);
+            Self(self.0)
         }
     }
 
@@ -345,5 +439,29 @@ mod test {
             }
             print!("{} ", heap.delete_min().unwrap());
         }
+    }
+
+    #[test]
+    fn droptest() {
+        let mut heap = BinomialHeap::new();
+        for i in 0..20 {
+            heap.insert(IntDebug(i));
+        }
+        heap.delete_min();
+        heap.delete_min();
+        heap.insert(IntDebug(25));
+    }
+
+    #[test]
+    fn clonetest() {
+        let mut heap = BinomialHeap::new();
+        for i in 0..20 {
+            heap.insert(IntDebug(i));
+        }
+        heap.delete_min();
+        heap.delete_min();
+        heap.insert(IntDebug(10));
+        println!("{:?}", heap);
+        println!("{:?}", heap.clone());
     }
 }

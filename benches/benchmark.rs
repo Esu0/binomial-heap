@@ -9,15 +9,27 @@ fn heaptest(c: &mut Criterion) {
     });
 }
 
-fn heapsort_test(c: &mut Criterion) {
+fn pairing_heapsort(c: &mut Criterion) {
     let mut group = c.benchmark_group("heapsort");
     for n in (1..20).map(|n| (1 << n) as usize) {
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
-            b.iter(|| heaps::bench_fn::heapsort(n))
+            b.iter(|| heaps::bench_fn::pairing::heapsort(n))
         });
     }
     group.finish();
 }
-criterion_group!(benches, heaptest, heapsort_test);
+
+fn binomial_heapsort(c: &mut Criterion) {
+    let mut group = c.benchmark_group("heapsort - binomial heap");
+    for n in (1..20).map(|n| (1 << n) as usize) {
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.iter(|| heaps::bench_fn::binomial::heapsort(n))
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, heaptest, pairing_heapsort, binomial_heapsort);
 criterion_main!(benches);
